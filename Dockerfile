@@ -14,9 +14,12 @@ COPY app ./app
 
 RUN mkdir -p /data
 
+# The management entrypoint runs two uvicorn worker processes.
 EXPOSE 8000
+# The read-only public entrypoint runs two uvicorn worker processes.
+EXPOSE 8080
 
-HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=12 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"
+# Compose defines a per-service healthcheck against the correct port.
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# docker compose supplies either `management` or `public` (see app/serve.py).
+CMD ["python", "-m", "app.serve", "management"]

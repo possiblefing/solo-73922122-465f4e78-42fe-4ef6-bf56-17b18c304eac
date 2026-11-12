@@ -16,6 +16,7 @@ from .accents import AccentPolicy
 from .archive import delete_page, get_page, search, upsert_page
 from .config import SETTINGS
 from .db import claim_rebuild, connect, fail_job, get_job, get_status, init_db
+from .publication_api import router as publication_router
 from .rebuild import cancel_local_rebuilds, start_rebuild_thread
 
 
@@ -75,6 +76,33 @@ Use the **Try it out** controls below (or `curl`):
 For a visible on-screen demonstration with a tiny dataset, run the API with
 `REBUILD_BATCH_DELAY_MS=250` (or increase the page count). The delay is only a
 demo aid and defaults to zero.
+
+### Redacted publication for the read-only public port
+
+The archive staff can publish an already-redacted snapshot without changing
+the original page:
+
+1. **Read the revision** — `GET /api/pages/ocr-001` returns `revision` (and the
+   original body/title, on this management port only).
+2. **Publish spans** — `POST /api/publications/ocr-001` with
+   `{"expected_revision": 1, "spans": [{"start": 3, "end": 7}, ...]}`. Each
+   half-open Unicode code-point span is replaced by one `█`. At most 20
+   non-empty, non-overlapping, in-bounds spans are accepted; otherwise HTTP
+   422. The source page is not modified. The response contains the exact
+   `published_body` that the public port will serve.
+3. **Read/search publicly** — the separate public port (default
+   `http://localhost:8080/docs`) exposes only `GET /public/pages/{page_id}` and
+   `GET /public/search?q=...`. It has no original-page endpoint, never returns
+   a title, and its word-AND search uses a fixed `keep` rule. Hits and totals
+   use only the redacted text.
+4. **Correction or delete** — any `PUT /api/pages/...` or
+   `DELETE /api/pages/...` withdraws the public snapshot in the same
+   transaction. A publish request prepared with the old `expected_revision`
+   then receives HTTP 409 and cannot restore it. Re-creating the same page ID
+   does not restore the old public text; publish the new revision explicitly.
+   `DELETE /api/publications/{page_id}` withdraws explicitly (idempotent).
+5. **Internal rebuilds are independent** — switching `keep`/`fold` only affects
+   internal search. The public projection keeps its own fixed `keep` index.
 
 ### Accent examples
 
@@ -169,9 +197,20 @@ app = FastAPI(
             "name": "index",
             "description": "Background generation rebuild and atomic accent-policy switch.",
         },
+        {
+            "name": "publication",
+            "description": (
+                "Redacted snapshots served by the separate read-only public port. "
+                "Publishing never changes the original archive page, and any later "
+                "page write or delete withdraws the public snapshot."
+            ),
+        },
         {"name": "ops", "description": "Health and documentation helpers."},
     ],
 )
+
+
+app.include_router(publication_router)
 
 
 @app.exception_handler(sqlite3.OperationalError)

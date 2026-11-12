@@ -3,28 +3,9 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
-from app.config import SETTINGS
-
-
-def configure_database(path: Path) -> None:
-    object.__setattr__(SETTINGS, "db_path", path)
-    object.__setattr__(SETTINGS, "rebuild_batch_delay_ms", 120)
-    object.__setattr__(SETTINGS, "rebuild_batch_size", 2)
-    object.__setattr__(SETTINGS, "rebuild_lease_seconds", 3)
-
-
-@pytest.fixture
-def client(tmp_path: Path):
-    configure_database(tmp_path / "archive.db")
-    from app.main import app
-    from app.rebuild import cancel_local_rebuilds
-
-    with TestClient(app) as test_client:
-        yield test_client
-    cancel_local_rebuilds()
+from tests.conftest import configure_database
 
 
 def _search(client: TestClient, query: str) -> dict:

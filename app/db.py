@@ -84,6 +84,24 @@ CREATE TABLE IF NOT EXISTS rebuild_jobs (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_rebuild_one_active
 ON rebuild_jobs((1))
 WHERE state IN ('queued', 'building', 'catching_up', 'activating');
+
+-- Public projections are deliberately separate from the internal generations.
+-- A published body is a durable, already-redacted snapshot.  It is never
+-- derived again from ``pages`` at startup: a withdrawn publication must stay
+-- withdrawn across restarts, even if an internal index is rebuilt.
+CREATE TABLE IF NOT EXISTS publications (
+    page_id TEXT PRIMARY KEY,
+    page_ref INTEGER,
+    source_rev INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    published_at TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS public_fts USING fts5(
+    page_id UNINDEXED,
+    body,
+    tokenize = 'unicode61 remove_diacritics 0'
+);
 """
 
 
@@ -210,6 +228,11 @@ def init_db() -> None:
         }
         if "owner_proc_start" not in job_columns:
             conn.execute("ALTER TABLE rebuild_jobs ADD COLUMN owner_proc_start TEXT")
+
+        # Older databases are upgraded with additive ``ALTER TABLE`` calls
+        # for columns introduced by later features.  ``publications`` is
+        # created with its final layout by SCHEMA_SQL above, so no migration
+        # is needed for it here.
 
         active_setting = conn.execute(
             "SELECT value FROM settings WHERE key = 'active_generation_id'"

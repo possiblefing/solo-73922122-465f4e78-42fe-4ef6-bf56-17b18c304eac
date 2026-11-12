@@ -1,23 +1,18 @@
 services:
+  # Management service: page writes, internal search, index rebuilds and
+  # redacted publication.  It is the only service that writes the database.
   api:
     build:
       context: .
       dockerfile: Dockerfile
     image: ocr-accent-archive:latest
-    command:
-      - uvicorn
-      - app.main:app
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8000"
-      # Two real API worker processes share one SQLite/WAL database.
-      - --workers
-      - "2"
+    command: ["python", "-m", "app.serve", "management"]
     ports:
       - "${API_PORT:-8000}:8000"
     environment:
       ARCHIVE_DB_PATH: /data/archive.db
+      ARCHIVE_API_PORT: "8000"
+      SERVICE_ROLE: management
       REBUILD_LEASE_SECONDS: "${REBUILD_LEASE_SECONDS:-20}"
       REBUILD_BATCH_SIZE: "${REBUILD_BATCH_SIZE:-500}"
       # Set to e.g. 250 for a visible live-rebuild demonstration.
@@ -33,6 +28,42 @@ services:
         - python
         - -c
         - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  # Read-only public service: published redacted bodies only.  No management
+  # route exists in this application; it opens read-only SQLite connections
+  # against the same WAL database file.
+  public:
+    image: ocr-accent-archive:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.serve", "public"]
+    ports:
+      - "${PUBLIC_PORT:-8080}:8080"
+    environment:
+      ARCHIVE_DB_PATH: /data/archive.db
+      ARCHIVE_PUBLIC_PORT: "8080"
+      SERVICE_ROLE: public
+      DB_BUSY_TIMEOUT_SECONDS: "${DB_BUSY_TIMEOUT_SECONDS:-30}"
+    volumes:
+      # Shared WAL database.  SQLite readers in WAL mode need the -shm/-wal
+      # side files, so the mount is read-write; the public application itself
+      # has no write routes and opens only query_only connections.
+      - archive-data:/data
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"
       interval: 5s
       timeout: 3s
       retries: 12

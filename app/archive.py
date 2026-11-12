@@ -13,6 +13,7 @@ from .db import (
     quote_identifier,
     utc_now,
 )
+from .publication import withdraw_publication
 
 
 def _fts_ident(generation: sqlite3.Row) -> str:
@@ -86,6 +87,10 @@ def upsert_page(page_id: str, title: str, body: str) -> dict[str, Any]:
                 normalize_for_policy(body, policy),
             ),
         )
+        # Any source write withdraws the public snapshot in this same
+        # transaction.  A later publish request with the stale revision gets
+        # HTTP 409; it can never restore the old public copy.
+        withdraw_publication(conn, page_id)
         conn.commit()
         return {
             "page_id": page_id,
@@ -147,6 +152,10 @@ def delete_page(page_id: str) -> dict[str, Any]:
             # Idempotent delete of an absent page.  This fallback also cleans
             # up any pre-existing orphan from an older schema version.
             conn.execute(f"DELETE FROM {ident} WHERE page_id = ?", (page_id,))
+
+        # A delete withdraws the public snapshot whether or not the page
+        # existed; withdrawal is itself idempotent.
+        withdraw_publication(conn, page_id)
 
         conn.commit()
         return {
